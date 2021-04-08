@@ -1,4 +1,5 @@
 const GUM_CO_RE = /(https?:\/\/)?gum\.co\/([0-9a-zA-Z]+)/;
+let CONTAINER;
 let IFRAME;
 
 function getProductId(url) {
@@ -48,16 +49,16 @@ function injectCSS() {
 }
 
 function injectIframe() {
-    const container = document.createElement("div");
-    container.className = "gumroad-container";
-    container.style = "width: 0px; height: 0px;";
+    CONTAINER = document.createElement("div");
+    CONTAINER.className = "gumroad-container";
+    CONTAINER.style = "width: 0px; height: 0px;";
     IFRAME = document.createElement("iframe");
     IFRAME.className = "gumroad-iframe";
     IFRAME.style = "width: 0px; height: 0px;";
-    container.appendChild(IFRAME);
-    document.body.appendChild(container);
-    container.onclick = () => {
-        container.style = "width: 0px; height: 0px;";
+    CONTAINER.appendChild(IFRAME);
+    document.body.appendChild(CONTAINER);
+    CONTAINER.onclick = () => {
+        CONTAINER.style = "width: 0px; height: 0px;";
         IFRAME.style = "width: 0px; height: 0px;";
     }
 }
@@ -67,7 +68,7 @@ function injectEventListeners(anchor) {
         event.preventDefault();
         const clientHeight = document.body.clientHeight;
         const clientWidth = document.body.clientWidth;
-        container.style = `width: ${clientWidth}px; height: ${clientHeight}px;`;
+        CONTAINER.style = `width: ${clientWidth}px; height: ${clientHeight}px;`;
         IFRAME.style = `width: ${clientWidth * 0.5}px; height: ${clientHeight * 0.5}px;`;
     };
     anchor.onmouseover = () => {
