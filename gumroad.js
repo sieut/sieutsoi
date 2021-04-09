@@ -1,4 +1,4 @@
-const GUM_CO_RE = /(https?:\/\/)?gum\.co\/([0-9a-zA-Z]+)/;
+const GUM_CO_RE = /(https?:\/\/)?gumroad\.com\/l\/([0-9a-zA-Z]+)/;
 let CONTAINER;
 let IFRAME;
 
