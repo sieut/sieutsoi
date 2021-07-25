@@ -1,0 +1,9 @@
+footer_entries:
+  - title: about
+    url: about
+
+  - title: github
+    url: https://github.com/sieut
+
+  - title: email
+    url: mailto:sieut@umich.edu

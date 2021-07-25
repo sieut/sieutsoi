@@ -1,0 +1,69 @@
+---
+layout: post
+title:  "Fast Matrix Multiplication - Part 1"
+date:   2021-07-24 21:00:39 -0700
+---
+
+# Introduction
+Inspired by a few blog posts about micro-optimizations on HN lately, I decided I want to take a stab at it myself. I picked [matrix multiplication](https://en.wikipedia.org/wiki/Matrix_multiplication) also because of a comment on HN mentioning you could spend a few months on it. This project will have absolutely no use in the real world as matrix multiplication is a solved problem, but I have too much time on my hand.
+
+The code is in Rust because it's gonna attract all the views and I'll become famous.
+
+## Benchmark Setup
+I use [criterion](https://github.com/bheisler/criterion.rs) for benchmarking, it's quite simple and very pleasant to use. The benchmarks try to multiply 100x120 and 120x200 matrices as many times as possible.
+
+# Naive Implementation
+```rust
+struct Matrix {
+    data: Vec<Vec<i32>>,
+}
+
+impl Matrix {
+    fn naive(a: &Matrix, b: &Matrix) -> Matrix {
+        let mut mat = Matrix::new((a.dim.0, b.dim.1));
+        for i in 0..a.dim.0 {
+            let row = a.row(i);
+            for j in 0..b.dim.1 {
+                let sum = row.iter().zip(b.col(j).iter())
+                    .map(|(x, y)| x * y).sum();
+                mat.set(i, j, sum);
+            }
+        }
+        mat
+    }
+
+    fn row(&self, idx: usize) -> Vec<i32> {
+        self.data[idx].clone()
+    }
+
+
+    fn col(&self, idx: usize) -> Vec<i32> {
+        let mut vec = Vec::with_capacity(self.dim.0);
+        for row in 0..self.dim.0 {
+            vec.push(self.get(row, idx));
+        }
+        vec
+    }
+}
+```
+
+This code is so naive, you might have thought I intentionally made it worse so my later improvements would look better. It just creates new Vecs for rows and cols for no reasons. And the cache wouldn't be happy with `col` for the following reason.
+
+## Cache lines
+When the CPU loads or caches data from RAM, it doesn't do so for just the piece of data that you ask for. It instead will load a contiguous block of memory. !!!FOOTNOTE (This might be an optimization or a limitation in the CPUs that force them to load a certain size of data, I'm not sure, please let me know if you know). For example, in our matrix, when we ask for `self.data[i][j]`, `self.data[i][j+1]..self.data[i][j+15]` are also loaded. !!!FOOTNOTE (size of cache lines) So if we were to write a piece of code like
+```rust
+for k in 0..16 {
+    print!(self.data[i][j+k])
+}
+```
+
+the CPU would only load the data from RAM once.
+
+Now if you look at the function `col` above, that will load a few entries of each row to build the column. It just doesn't take advantage of this design of the CPU at all, thus wasting work and slowing things down.
+
+## Performance
+```
+Naive Multiplication    time:   4.4196 ms / iteration
+```
+
+It's pretty terrible.
