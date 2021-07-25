@@ -7,12 +7,14 @@ date:   2021-07-24 21:00:39 -0700
 # Introduction
 Inspired by a few blog posts about micro-optimizations on HN lately, I decided I want to take a stab at it myself. I picked [matrix multiplication](https://en.wikipedia.org/wiki/Matrix_multiplication) also because of a comment on HN mentioning you could spend a few months on it. This project will have absolutely no use in the real world as matrix multiplication is a solved problem, but I have too much time on my hand.
 
-The code is in Rust because it's gonna attract all the views and I'll become famous.
+The code is in Rust because it's gonna attract all the views and I'll become famous. You can find the repo [here](https://github.com/sieut/fast-matrix-multiplication).
 
 ## Benchmark Setup
-I use [criterion](https://github.com/bheisler/criterion.rs) for benchmarking, it's quite simple and very pleasant to use. The benchmarks try to multiply 100x120 and 120x200 matrices as many times as possible.
+I use [criterion](https://github.com/bheisler/criterion.rs) for benchmarking, it's quite simple and very pleasant to use. The benchmarks try to multiply 100x120 and 120x200 matrices as many times as possible. And my computer runs on a Ryzen 7 3700X.
 
 # Naive Implementation
+We'll start with the simplest approach: three nested for loops, to loop over all rows of the first matrix, all cols of the second matrix and calculate the dot product between those rows and columns.
+
 ```rust
 struct Matrix {
     data: Vec<Vec<i32>>,
@@ -32,8 +34,8 @@ impl Matrix {
         mat
     }
 
-    fn row(&self, idx: usize) -> Vec<i32> {
-        self.data[idx].clone()
+    fn row(&self, idx: usize) -> &[i32] {
+        &self.data[idx]
     }
 
 
@@ -47,23 +49,139 @@ impl Matrix {
 }
 ```
 
-This code is so naive, you might have thought I intentionally made it worse so my later improvements would look better. It just creates new Vecs for rows and cols for no reasons. And the cache wouldn't be happy with `col` for the following reason.
+Let's talk about the most obvious problem in the code.
 
 ## Cache lines
-When the CPU loads or caches data from RAM, it doesn't do so for just the piece of data that you ask for. It instead will load a contiguous block of memory. !!!FOOTNOTE (This might be an optimization or a limitation in the CPUs that force them to load a certain size of data, I'm not sure, please let me know if you know). For example, in our matrix, when we ask for `self.data[i][j]`, `self.data[i][j+1]..self.data[i][j+15]` are also loaded. !!!FOOTNOTE (size of cache lines) So if we were to write a piece of code like
+
+When the CPU loads or caches data from RAM, it doesn't do so for just the piece of data that you ask for. It instead will load a contiguous block of memory to fit its cache lines. For example, in our matrix, when we ask for `self.data[i][j]`, `self.data[i][j+1]..self.data[i][j+15]` are also loaded. So if we were to write a piece of code like
 ```rust
 for k in 0..16 {
     print!(self.data[i][j+k])
 }
 ```
 
-the CPU would only load the data from RAM once.
+the CPU would only load the data from RAM once because the rest is cached!
 
-Now if you look at the function `col` above, that will load a few entries of each row to build the column. It just doesn't take advantage of this design of the CPU at all, thus wasting work and slowing things down.
+Now if you look at the function `col` above, that will load a few entries of each row, take the first one, and throw away the rest, to build the column. It just doesn't take advantage of this design of the CPU at all, thus wasting work and slowing things down.
 
 ## Performance
 ```
-Naive Multiplication    time:   4.4196 ms / iteration
+Naive Multiplication    time:   2.9190 ms / iteration
 ```
 
 It's pretty terrible.
+
+# Cache Line Optimized Columns
+With cache lines in mind, we can calculate dot products between one row and multiple columns at a time, instead of one row and one column. First we need to find out how many columns at a time.
+
+```shell
+getconf -a  # Prints all system configuration variables
+> LEVEL1_DCACHE_LINESIZE            64
+> LEVEL2_DCACHE_LINESIZE            64
+> LEVEL3_DCACHE_LINESIZE            64
+```
+
+My CPU cache has line size of 64 bytes (16 4-byte integers), so we expect `self.data[i][j]` would load all the data until `self.data[i][j + 15]`. So let's re-write out matrix multiplication code into
+
+```rust
+const LINESIZE: usize = 64;
+const INTS_PER_LINE: usize = 16;        // 64 / 4
+
+pub fn cacheline_optimized_col_mul(a: &Matrix, b: &Matrix) -> Matrix {
+    let mut mat = Matrix::new((a.dim.0, b.dim.1));
+    for i in 0..mat.dim.0 {
+        let row = a.row(i);
+        for j in (0..mat.dim.1).step_by(INTS_PER_LINE) {
+            // An interator that returns the ith element of 16 columns each iteration
+            let cols = b.cols_iter(j);
+            // A buffer to store the running result of
+            // row[i].dot(col[j])..row[i].dot(col[j+15])
+            let mut buffer = [0i32; INTS_PER_LINE];
+            row.iter().zip(cols)
+                .for_each(|(row_ele, cols_ele)|
+                    Matrix::vec_scalar_mul(row_ele, cols_ele, &mut buffer));
+            for k in j..j + INTS_PER_LINE {
+                mat.set(i, k, buffer[k - j]);
+            }
+        }
+    }
+    mat
+}
+
+// Perform scalar multiplication on vec, then adds the result to output
+fn vec_scalar_mul(scalar: &i32, vec: &[i32], output: &mut [i32]) {
+    for (i, col_ele) in vec.iter().enumerate() {
+        output[i] += scalar * col_ele;
+    }
+}
+```
+
+## Performance
+```
+Cache Line Optimized Columns Multiplication     time:   920.28 us / iteration
+```
+
+That's awesome! Over 3x faster than our naive implementation! But how fast can we get before deep diving into assembly and `perf`?
+
+# SIMD
+When calculating scalar multiplication on a vector, we are doing a lot of repetitive work. We multiply all elements of the vector with a scalar value, and add all the results into our buffer.
+
+And that is a perfect candidate for [SIMD](https://en.wikipedia.org/wiki/SIMD). In short, if you're performing the same operation to an array of values, your CPU might have specialized instructions to do it all at once instead of sequentially in a loop. It's one of the easier optimizations as your CPU is doing all the work for you, there are no weird hacks to achieve performance gain.
+
+So let's re-write scalar multiplication with SIMD. You'll notice in the code below, we're doing calculations on blocks of 8 integers instead of 16 (our cache line), that is because my CPU only supports SIMD instructions for 256-bit vectors. It's lengthy code, but basically instead of doing math in a loop, it's trying to do the same thing in two blocks of 8 integers.
+```rust
+// Tell Rust to only compile this code iff
+// - the architecture is either x86 or x86_64
+// - the CPU supports avx2, a feature set in the SIMD world
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"),
+              target_feature = "avx2"))]
+fn vec_scalar_mul(scalar: &i32, vec: &[i32], output: &mut [i32]) {
+    unsafe {
+        // Import from different modules based on architecture
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::{
+            _mm256_set_epi32, _mm256_load_si256, _mm256_mullo_epi32,
+            _mm256_add_epi32, __m256i};
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::{
+            _mm256_set_epi32, _mm256_load_si256, _mm256_mullo_epi32,
+            _mm256_add_epi32, __m256i};
+        // Load the scalar value into a SIMD vector of 8 integers
+        let scalar = _mm256_set_epi32(
+            scalar.clone(), scalar.clone(), scalar.clone(), scalar.clone(),
+            scalar.clone(), scalar.clone(), scalar.clone(), scalar.clone());
+        // Load first 8 ints into a SIMD vector
+        let simd_vec = _mm256_load_si256(vec.as_ptr() as *const __m256i);
+        // Multiply the scalar and the first 8 ints, element wise
+        let simd_vec = _mm256_mullo_epi32(scalar, simd_vec);
+        // Load first 8 ints of the buffer into a SIMD vector
+        let buffer = _mm256_load_si256(output.as_ptr() as *const __m256i);
+        // Add the result of previous multiplication to the buffer, element wise
+        let buffer = _mm256_add_epi32(simd_vec, buffer);
+        // Copy the result back to our output buffer
+        output[0..8].copy_from_slice(
+            &std::mem::transmute::<__m256i, [i32; 8]>(buffer));
+
+        // And similarly for the next 8 integers
+        let simd_vec = _mm256_load_si256(vec.as_ptr().add(8) as *const __m256i);
+        let simd_vec = _mm256_mullo_epi32(scalar, simd_vec);
+        let buffer = _mm256_load_si256(output.as_ptr().add(8) as *const __m256i);
+        let buffer = _mm256_add_epi32(simd_vec, buffer);
+        output[8..INTS_PER_LINE].copy_from_slice(
+            &std::mem::transmute::<__m256i, [i32; 8]>(buffer));
+    }
+}
+```
+
+
+## Performance
+```
+Cache Line Optimized with SIMD          time:   159.08 us / iteration
+```
+
+Holy cow! That's more than 5.5x faster than our previous implementation! It's a crazy improvement for just using some specialized instructions instead of your regular for loop.
+
+# Closing Thoughts
+I hope you enjoyed the project so far! In this post, I only talked about some rather simple improvements. But that doesn't mean I didn't have failed attempts to get here. In the next post, I'm planning to talk about some failed ideas that I tried. So stay tuned!
+
+If you have any feedback for my code, my writing, or anything, please let me know via <sieut@umich.edu>!
