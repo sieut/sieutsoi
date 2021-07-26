@@ -7,3 +7,6 @@ footer_entries:
 
   - title: email
     url: mailto:sieut@umich.edu
+
+  - title: feed
+    url: feed.xml

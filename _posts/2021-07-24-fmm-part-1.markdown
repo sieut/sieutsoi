@@ -2,6 +2,8 @@
 layout: post
 title:  "Fast Matrix Multiplication - Part 1"
 date:   2021-07-24 21:00:39 -0700
+author: Sieu Tsoi
+description: Micro-optimizations for matrix multiplication in Rust
 ---
 
 # Introduction
