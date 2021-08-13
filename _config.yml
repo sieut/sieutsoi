@@ -41,10 +41,16 @@ theme_config:
   home:
     title_blog: Blog
 
+jekyll_analytics:
+  Matomo:
+    url: sieutsoi.matomo.cloud
+    siteId: "1"
+
 plugins:
   - jekyll-sitemap
   - jekyll-feed
   - jekyll-seo-tag
+  - jekyll-analytics
 
 # Exclude from processing.
 # The following items will not be processed, by default.
