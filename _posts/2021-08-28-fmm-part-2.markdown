@@ -1,0 +1,168 @@
+---
+layout: post
+title:  "Fast Matrix Multiplication - Part 2"
+date:   2021-08-28 17:16:00 -0700
+author: Sieu Tsoi
+description: Micro-optimizations for matrix multiplication in Rust
+---
+
+# Introduction
+This is part 2 of the Fast Matrix Multiplication series. In this post, I'll talk about a bug and how I accidentally optimized my code.
+
+## Quick Recap
+At the end of [part 1]({% post_url 2021-07-24-fmm-part-1 %}), we managed to make our code 5x faster by using SIMD along with a data accessing pattern that keeps cache lines in mind. The SIMD code was under an `unsafe` block, which can cause undefined behavior if you didn't know what you were doing...
+
+# Segmentation Fault
+So I decided to become responsible and wrote some tests before moving forward with my investigations.
+
+```rust
+fn test_multiplications() {
+    let a = Matrix::rand_matrix((24, 24));
+    let b = Matrix::rand_matrix((24, 24));
+    let naive = Matrix::naive_mul(&a, &b);
+    // Function with SIMD
+    assert_eq!(naive.data, Matrix::cacheline_optimized_col_mul(&a, &b).data);
+}
+```
+
+It passed when I wrote the test. But it feels like any small changes would introduce a segfault. For example, adding another function to the test, adding/removing a new variable to `cacheline_optimized_col_mul`, or any small change really.
+
+Turns out, to use [`_mm256_load_si256`](https://doc.rust-lang.org/core/arch/x86_64/fn._mm256_load_si256.html), you have to align your data on a 32-byte boundary. And I guess I was lucky enough that my matrices' buffers were aligned before? I still have no clue how my test passed.
+
+## The Fix
+Instead of storing data in a `Vec<Vec<i32>>`, I changed it to just `Vec<i32>`. The vector has to start at an aligned location, and each row of the matrix has to be padded with 0. I can align and pad to 32 bytes but since the cache line is 64 bytes, that would probably work better as a general padding/aligning boundary.
+
+```rust
+struct Matrix {
+    data: Vec<i32>;
+    dim: (usize, usize),
+    row_size: usize,
+}
+
+impl Matrix {
+    pub fn new(dim: (usize, usize)) -> Self {
+        // Funky math to pad the rows
+        let line_per_row = (dim.1 * 4) / LINESIZE +
+            ((dim.1 % LINESIZE != 0) as usize);
+        let row_size = line_per_row * LINESIZE / 4;
+        let data = unsafe { Matrix::aligned_data_buffer(row_size * dim.0) };
+        Matrix {
+            data,
+            dim,
+            row_size,
+        }
+    }
+}
+```
+
+And to achieve an aligned data buffer, I need to use a Rust feature I've not used before: `#[repr(align(x))]`. This code below is taken from [StackOverflow](https://stackoverflow.com/questions/60180121/how-do-i-allocate-a-vecu8-that-is-aligned-to-the-size-of-the-cache-line).
+
+```rust
+#[repr(align(64))]
+struct AlignedBuffer([i32; INTS_PER_LINE]);
+
+unsafe fn aligned_data_buffer(size: usize) -> Vec<i32> {
+    let capacity = size / INTS_PER_LINE;
+    let buffer = AlignedBuffer([0; INTS_PER_LINE]);
+    let mut aligned: Vec<AlignedBuffer> = vec![buffer; capacity];
+
+    let ptr = aligned.as_mut_ptr() as *mut i32;
+    std::mem::forget(aligned);
+    Vec::from_raw_parts(ptr, size, size)
+}
+```
+
+# Accidental Optimization
+The latest version of our code looks something like this
+
+```rust
+fn matmul(a: &Matrix, b: &Matrix) -> Matrix {
+    let mut mat = Matrix::new((a.dim.0, b.dim.1));
+    for row in a.rows() {
+        for cols_block in b.cols_blocks() {
+            let mut buffer = [0i32; INTS_PER_LINE];
+            for (row_ele, cols_ele) in row.zip(cols_block) {
+                SIMD_vec_scalar_mul(row_ele, cols_ele, &mut buffer);
+            }
+            copy_buffer_to_mat(&mat.data, buffer);
+        }
+    }
+}
+```
+
+I create a new buffer every iteration, call the SIMD function, then copy the buffer into the result matrix, all for convenience at the time. I figured well I should clean that code up and do the calculation on `mat.data`, cut down a few instructions, make it faster!
+
+```rust
+// No more intermediate buffer!
+for (row_ele, cols_ele) in row.zip(cols_block) {
+    SIMD_vec_scalar_mul(
+        row_ele, cols_ele, &mut mat.data[idx..idx + INTS_PER_LINE]);
+}
+```
+
+Well then the benchmark came back like this:
+```
+SIMD with buffer            time:   159.08 us / iteration
+SIMD without buffer         time:   355.63 us / iteration
+```
+
+How the heck?
+
+## perf stat
+There may be better ways to start this investigation, but I was very excited about using `perf stat`. One event that really stood out when running it on the two versions is `cache-misses`.
+
+```sh
+$ perf stat -e cache-references,cache-misses ./fmm
+
+SIMD with buffer            cache-misses:       9.295% of all cache refs
+SIMD without buffer         cache-misses:       32.292% of all cache refs
+```
+
+I guess it makes sense, without using a buffer, the first call to `SIMV_vec_scalar_mul` of each `(row, cols_block)` pair will have to load the `mat.data` slice into memory. That then causes cache misses, because each slice is loaded only once for the whole matmul calculation. But one thing that baffles me is, with a buffer, we'd still have to load that slice of memory to write the result. So how could it be faster?
+
+## Assembly
+There is this tool in the Rust world that is pretty great, `cargo-asm`. You can obtain the assembly code without `cargo-asm`, but it can gives you the assembly code for the specific function that you want. So it helped a ton because you don't need to go through the assembly of your entire program. Here is the assembly of `SIMD_vec_scalar_mul` without a buffer.
+
+```sh
+# SIMD_vec_scalar_mul without buffer
+# Load the scalar value into ymm0
+vpbroadcastd    ymm0, dword, ptr, [r14, +, 4*rsi]
+# Multiplication and addition then store result in ymm1
+vpmulld         ymm1, ymm0, ymmword, ptr, [rax, +, 4*rcx]
+vpaddd          ymm1, ymm1, ymmword, ptr, [rdx, +, 4*rdi]
+# Store result in ymm1 to [rdx + 4*rdi], which is the `mat.data` slice
+vmovdqu         ymmword, ptr, [rdx, +, 4*rdi], ymm1
+# Then jump back to beginning of the loop
+```
+
+This version is simple enough. Just straightforward calculations and storing the result to `mat.data`. Now let's look at the assembly of `SIMD_vec_scalar_mul` with buffer and the assembly for storing its result to `mat.data`.
+
+```sh
+# SIMD_vec_scalar_mul with buffer, similarly
+vpbroadcastd ymm0, dword, ptr, [r14, +, rsi]
+vpmulld ymm1, ymm0, ymmword, ptr, [r9, +, 4*rdi]
+# Difference is in the addition and storing result to a stack variable, [rsp + 64],
+# that is our buffer
+vpaddd  ymm1, ymm1, ymmword, ptr, [rsp, +, 64]
+vmovdqa ymmword, ptr, [rsp, +, 64], ymm1
+
+# Storing result to `mat.data`
+# Value at the buffer is moved to ymm0, then to [r10 + 4*rax],
+# which I assume is the `mat.data` slice
+vmovdqa ymm0, ymmword, ptr, [rsp, +, 64]
+vmovdqu ymmword, ptr, [r10, +, 4*rax], ymm0
+# Move value in ymm2 to the buffer, I think to reset it to all zeroes
+vmovaps ymmword, ptr, [rsp, +, 64], ymm2
+# Then jump back to beginning of the loop
+```
+
+In this version, we see Rust generated assembly code to move the result in the buffer to `ymm0` before writing it to `mat.data`, which should be very fast because the buffer is cached. This is probably an optimization so that in the very next instruction, the buffer can be zeroed instantaneously. Storing the result would take a while because the `mat.data` slice is not cached, but since there are a few instructions to run at the beginning of the loop, I don't think that was blocking the next instructions.
+
+As opposed to the no-buffer version, the calculation is stalled because we need to fetch the `mat.data` slice in the middle of it. And it needs to stay in the cache for subsequent calculations too.
+
+There is one more thing that I cannot verify. There are `stream` instructions that let you bypass all caches when you write data to memory. With the code that uses buffer, it perfectly applies because when we store data to `mat.data`, we never need to use it again, so it is best to bypass the cache. And I tried using it to see if there is performance gain, but there wasn't any. So maybe this is optimized by the hardware?
+
+# Closing Thoughts
+Things are getting weirder, but it was pretty fun to study about my accidental optimization. There are still blurry things there though, I've only made guesses about how that could be, and haven't confirmed all of them yet.
+
+Again, you can reach out to me at <sieut@umich.edu> if you know something about this mystery!
