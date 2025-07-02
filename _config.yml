@@ -23,8 +23,8 @@ email: sieut@umich.edu
 description: >- # this means to ignore newlines until "baseurl:"
   Sieu's blog. I write about my side projects in programming or anything else.
 baseurl: "" # the subpath of your site, e.g. /blog
-url: "https://sieutsoi.com" # the base hostname & protocol for your site, e.g. http://example.com
-github_username:  sieut
+url: "https://www.sieutsoi.com" # the base hostname & protocol for your site, e.g. http://example.com
+github_username: sieut
 author: Sieu Tsoi
 
 # Build settings
