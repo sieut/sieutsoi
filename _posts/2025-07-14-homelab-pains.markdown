@@ -10,13 +10,13 @@ After a few rounds of upgrade to my personal PC, I was only missing an SSD and a
 
 # Installing an OS
 
-This should have been the easiest thing in the world. I've done this countless of times. Plug the bootable USB in, press Enter, press Enter, press Enter, and voilà. Nope. Obstacle number one: The AMD 3700X *does not* have an iGPU 🙃 I cannot press Enter Enter Enter because I cannot plug a monitor into it and see what is going on!
+This should have been the easiest thing in the world. I've done this countless times. Plug the bootable USB in, press Enter, press Enter, press Enter, and voilà. Nope. Obstacle number one: The AMD 3700X *does not* have an iGPU 🙃 I cannot press Enter Enter Enter because I cannot plug a monitor into it and see what is going on!
 
-This is all but a minor deterrent! - I said.
+This is but a minor deterrent! - I said.
 
 I shall learn and do the coolest thing ever - [automated installation](https://pve.proxmox.com/wiki/Automated_Installation#Prepare_an_Installation_ISO). I read the doc, wrote the installation instructions, figured out how to automatically auto-install once the USB is booted, etc. But nothing was showing up, and I sat there dumbfounded as I realized: THERE IS NO WAY TO KNOW WHAT WENT WRONG!!! I don't have a monitor... (well, my hopeful-to-be homelab didn't)
 
-Ok ok ok maybe I won't do the coolest thing ever then. Just the smart thing. I'll just plug the SSD into my PC, install an OS onto it, and plug it back to the homelab. Problem solved! First and second steps went swimmingly, I did this countless of times, remember? But plugging it back to the homelab didn't work. My PC was upgraded to an AM5 CPU, which was the entire reason why I had all the parts to build a homelab. The upgrade from AM4 to AM5 required new motherboard and new RAM as well. OSes installed by an AM5 CPU don't work on an AM4 platform...
+Ok ok ok maybe I won't do the coolest thing ever then. Just the smart thing. I'll just plug the SSD into my PC, install an OS onto it, and plug it back to the homelab. Problem solved! First and second steps went swimmingly, I did this countless times, remember? But plugging it back to the homelab didn't work. My PC was upgraded to an AM5 CPU, which was the entire reason why I had all the parts to build a homelab. The upgrade from AM4 to AM5 required new motherboard and new RAM as well. OSes installed by an AM5 CPU don't work on an AM4 platform...
 
 And so I had to resort to the worst thing ever - unplug the ginormous 4080 from my PC, put it in my homelab, *then* I would have access to the GUI to do the installation. As I was carrying out that plan, I realized that the homelab's tiny PSU may not have enough juice to power the freakin' 4080, and I'm afraid of the GPU breaking because of that, so I had to cook up this amalgamation of my PC's PSU powering the components of the homelab.
 
@@ -31,7 +31,7 @@ And so I had to resort to the worst thing ever - unplug the ginormous 4080 from 
 *This might be a fire hazard*
 {:.image-caption}
 
-P/S: I later learned from my father, who is closer to being a real engineer than I am, that underpowered electrical devices may just be... underpowered? And that may not affect their life?
+P.S.: I later learned from my father, who is closer to being a real engineer than I am, that underpowered electrical devices may just be... underpowered? And that may not affect their life?
 
 But hey, this did it. I had an OS on my homelab. I use [Proxmox](https://www.proxmox.com/en/products/proxmox-virtual-environment/overview), btw. This fact will be relevant in the next section.
 
@@ -67,7 +67,7 @@ Well, if it was 1/, I can absolutely keep rebooting until I have connection agai
 
 # Re-Installing an OS
 
-I was kinda done at this point, some data loss is OK to me. So yea, after a year, I whipped out that abomination of a, well I can't even call it a setup, whatever. A rare opportunistic thought also convinced me to buy a dedicated NIC in case 2/ from above was true. So I did. Installed that new NIC into one of the two PCIe x1 slots, then installed Proxmox again. Did the whole dance of updating `/etc/network/interfaces` so I can connect the homelab to the modem. Booted it up to double check everything before putting the innards back into the case. At this point I didn't even exactly remember these steps after a whole year, I was kinda relieved that every went ok.
+I was kinda done at this point, some data loss is OK to me. So yea, after a year, I whipped out that abomination of a, well I can't even call it a setup, whatever. A rare opportunistic thought also convinced me to buy a dedicated NIC in case 2/ from above was true. So I did. Installed that new NIC into one of the two PCIe x1 slots, then installed Proxmox again. Did the whole dance of updating `/etc/network/interfaces` so I can connect the homelab to the modem. Booted it up to double check everything before putting the innards back into the case. At this point I didn't even exactly remember these steps after a whole year, I was kinda relieved that everything went OK.
 
 Ok so I started assembling the machine into the case. I don't even know what to say. The case doesn't have an opening for the bottom PCIe x1 slot. Arghhhhhhhhh...
 
@@ -93,7 +93,7 @@ date >> ~/ip.logs
 ip link show >> ~/ip.logs
 ```
 
-Put that in `crontab` with `@reboot command.sh`, and the script would print out the names of the NICs (I have 2 now, the onboard one and the new dedicated one). So idea: plug NIC into top slot, reboot, wait a few minutes, let the script run, then shutdown, plug NIC back into bot slot, reboot, connect to host, check the output. This way, I'll know what the new name is, and I can update `/etc/network/interfaces` correctly.
+Put that in `crontab` with `@reboot command.sh`, and the script would print out the names of the NICs (I have 2 now, the onboard one and the new dedicated one). So idea: plug NIC into top slot, reboot, wait a few minutes, let the script run, then shutdown, plug NIC back into bottom slot, reboot, connect to host, check the output. This way, I'll know what the new name is, and I can update `/etc/network/interfaces` correctly.
 
 This is literally the content of `ip.logs`
 
