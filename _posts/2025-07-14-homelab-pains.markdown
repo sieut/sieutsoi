@@ -63,4 +63,96 @@ I asked Claude about it, and I even asked about testing it before applying the c
 
 So desperately, I had a long chat with Claude on how this could be salvaged. Claude was certainly... very agreeable (will probably write about this some day). Every whatabout I gave it was "*Absolutely!*" possible. But ok, after a bit of conversing, I can be convinced that this could be, 1/ a race condition, where the network interface was brought up before the name override happened, or 2/ a bandwidth issue with 2 SSDs, a NIC, and everything else that share the same PCI lane.
 
-Well, if it was 1/, I can absolutely keep rebooting until I have connection again. I rebooted my homelab a few times, didn't change, so I rebooted a few more times, and I rebooted the modem as well, because we're reboot partying here, and at one point, it had connection! So I took out the name override, pointed my network interface to a device named `enp6s0`, double checked, took a deep breath, and rebooted. And then it never went online again.
+Well, if it was 1/, I can absolutely keep rebooting until I have connection again. I rebooted my homelab a few times, didn't change, so I rebooted a few more times, and I rebooted the modem as well, because we're reboot partying here, and at one point, it had connection! So I took out the name override, pointed my network interface to a device named `enp6s0`, double checked, took a deep breath, and rebooted. And then it never went online again. <small>haha.</small>
+
+# Re-Installing an OS
+
+I was kinda done at this point, some data loss is OK to me. So yea, after a year, I whipped out that abomination of a, well I can't even call it a setup, whatever. A rare opportunistic thought also convinced me to buy a dedicated NIC in case 2/ from above was true. So I did. Installed that new NIC into one of the two PCIe x1 slots, then installed Proxmox again. Did the whole dance of updating `/etc/network/interfaces` so I can connect the homelab to the modem. Booted it up to double check everything before putting the innards back into the case. At this point I didn't even exactly remember these steps after a whole year, I was kinda relieved that every went ok.
+
+Ok so I started assembling the machine into the case. I don't even know what to say. The case doesn't have an opening for the bottom PCIe x1 slot. Arghhhhhhhhh...
+
+```
+# A shitty diagram attempting to convey the situation I was in
+
+ |
+ |
+[ ] -- -         # Top PCIe x1
+[ ] -- --------  # A PCIe x16 for GPU
+ |  -- -         # Bottom PCIe x1
+ |________________________________
+ ^ No opening for the LAN port
+```
+
+
+And oh I am so absolutely certain that if I install the NIC into the other x1 slot, the name is gonna change. But no worries, I had an idea.
+
+```bash
+#!/bin/sh
+echo "----------------------" >> ~/ip.logs
+date >> ~/ip.logs
+ip link show >> ~/ip.logs
+```
+
+Put that in `crontab` with `@reboot command.sh`, and the script would print out the names of the NICs (I have 2 now, the onboard one and the new dedicated one). So idea: plug NIC into top slot, reboot, wait a few minutes, let the script run, then shutdown, plug NIC back into bot slot, reboot, connect to host, check the output. This way, I'll know what the new name is, and I can update `/etc/network/interfaces` correctly.
+
+This is literally the content of `ip.logs`
+
+```
+-------------------------------------
+Sun Jul 13 05:23:22 PM +07 2025
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: enp5s0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast master vmbr0 state DOWN mode DEFAULT group default qlen 1000
+    link/ether 98:03:8e:a7:b4:4d brd ff:ff:ff:ff:ff:ff
+3: enp7s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 24:4b:fe:93:36:65 brd ff:ff:ff:ff:ff:ff
+4: wlp6s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether f8:ac:65:eb:34:a8 brd ff:ff:ff:ff:ff:ff
+5: vmbr0: <BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 98:03:8e:a7:b4:4d brd ff:ff:ff:ff:ff:ff
+-------------------------------------
+Sun Jul 13 05:27:12 PM +07 2025
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+2: enp6s0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast master vmbr0 state DOWN mode DEFAULT group default qlen 1000
+    link/ether 24:4b:fe:93:36:65 brd ff:ff:ff:ff:ff:ff
+3: enp7s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 98:03:8e:a7:b4:4d brd ff:ff:ff:ff:ff:ff
+4: wlp5s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether f8:ac:65:eb:34:a8 brd ff:ff:ff:ff:ff:ff
+5: vmbr0: <BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+    link/ether 24:4b:fe:93:36:65 brd ff:ff:ff:ff:ff:ff
+```
+
+Cool, `enp5s0` became `enp6s0`. I just need to point the `vmbr0` bridge to `enp6s0` instead of `enp5s0` in `/etc/network/interfaces`. Did that. Rebooted. Did not connect. Wait.
+
+Did you see the cause in `ip.logs` before reading this line? Well here
+
+```
+-------------------------------------
+2: enp5s0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast master vmbr0 state DOWN mode DEFAULT group default qlen 1000
+    link/ether 98:03:8e:a7:b4:4d brd ff:ff:ff:ff:ff:ff
+                ^^^^^^^^^^^^^^^  # THE MAC OF THE NIC
+
+3: enp7s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 24:4b:fe:93:36:65 brd ff:ff:ff:ff:ff:ff
+-------------------------------------
+2: enp6s0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc pfifo_fast master vmbr0 state DOWN mode DEFAULT group default qlen 1000
+    link/ether 24:4b:fe:93:36:65 brd ff:ff:ff:ff:ff:ff
+                ^^^^^^^^^^^^^^^  # NO, THIS IS NOT THE NIC
+
+3: enp7s0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT group default qlen 1000
+    link/ether 98:03:8e:a7:b4:4d brd ff:ff:ff:ff:ff:ff
+                ^^^^^^^^^^^^^^^  # THIS IS THE NIC
+
+```
+
+Not only did it change the name of the dedicated NIC, but it also changed the name of the onboard NIC. What was once `enp7s0` was renamed to `enp6s0`, and the dedicated NIC became `enp7s0`.
+
+From various occasions at work, I've learned that there always is a reason for why things are the way they are. **but SERIOUSLY WHAT THE FUCK.**
+
+And no, I did not have the vast wisdom to copy `ip.logs` for the convenience of true debugging. In my last ditch effort, I really just went "well what the fuck, there are two ports, one doesn't work, what about the other?" And I was just really lucky that that was it.
+
+# Closing Thoughts
+
+None. Intellectual thinking has truly left me by this point. Bye.
