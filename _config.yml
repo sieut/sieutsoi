@@ -45,6 +45,13 @@ plugins:
   - jekyll-sitemap
   - jekyll-feed
   - jekyll-seo-tag
+  - jekyll-analytics
+
+jekyll_analytics:
+  Plausible:
+    domain: "sieutsoi.com"
+    source: "https://plausible.sieutsoi.com/js/script.js"
+    host: "https://plausible.sieutsoi.com"
 
 # Exclude from processing.
 # The following items will not be processed, by default.
